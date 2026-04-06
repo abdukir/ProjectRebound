@@ -238,7 +238,7 @@ void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
             //std::cout << "TRYING TO REPLICATE" << std::endl;
             if (NetDriver) {
                 libReplicate->CallFromTickFlushHook(ActorInfos, PlayerControllerInfos, CastConnections, ActorName, NetDriver);
-                *(int*)(&NetDriver + 0x420) = *(int*)(&NetDriver + 0x420) + 1;
+                *(int*)((uintptr_t)NetDriver + 0x420) = *(int*)((uintptr_t)NetDriver + 0x420) + 1;
             }
         }
     }
