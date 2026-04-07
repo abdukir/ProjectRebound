@@ -149,8 +149,15 @@ void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
         std::vector<void*> PlayerControllers = std::vector<void*>();
 
         for (UNetConnection* Connection : NetDriver->ClientConnections) {
+            if (!Connection)
+                continue;
             if (Connection->OwningActor) {
-                Connection->ViewTarget = Connection->PlayerController ? Connection->PlayerController->GetViewTarget() : Connection->OwningActor;
+                if (Connection->PlayerController) {
+                    AActor* VT = Connection->PlayerController->GetViewTarget();
+                    Connection->ViewTarget = VT ? VT : Connection->OwningActor;
+                } else {
+                    Connection->ViewTarget = Connection->OwningActor;
+                }
                 Connections.push_back(Connection);
             }
         }
@@ -349,9 +356,35 @@ __int64 NotifyAcceptingConnectionHook(UObject* obj) {
 
 SafetyHookInline NotifyControlMessage = {};
 
-char NotifyControlMessageHook(unsigned __int64 ScuffedShit, __int64 a2, uint8_t a3, __int64 a4) {
-    UWorld::GetWorld()->NetDriver = (UIpNetDriver*)GetLastOfType(UIpNetDriver::StaticClass(), false);
+char NotifyControlMessageSafe(unsigned __int64 ScuffedShit, __int64 a2, uint8_t a3, __int64 a4);
 
+char NotifyControlMessageHook(unsigned __int64 ScuffedShit, __int64 a2, uint8_t a3, __int64 a4) {
+    if (UWorld::GetWorld()) {
+        UIpNetDriver* Driver = (UIpNetDriver*)GetLastOfType(UIpNetDriver::StaticClass(), false);
+        if (Driver) {
+            UWorld::GetWorld()->NetDriver = Driver;
+            // Ensure all client connections have their Driver pointer set
+            for (UNetConnection* Conn : Driver->ClientConnections) {
+                if (Conn && !Conn->Driver)
+                    Conn->Driver = Driver;
+            }
+        }
+    }
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+        __try {
+            return NotifyControlMessageSafe(ScuffedShit, a2, a3, a4);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            std::cout << "[CRASH] NotifyControlMessage crashed (attempt " << (attempt+1) << "/3), retrying..." << std::endl;
+            Sleep(500);
+        }
+    }
+    std::cout << "[CRASH] NotifyControlMessage failed all retries" << std::endl;
+    return 0;
+}
+
+char NotifyControlMessageSafe(unsigned __int64 ScuffedShit, __int64 a2, uint8_t a3, __int64 a4) {
     return NotifyControlMessage.call<char>(ScuffedShit, a2, a3, a4);
 }
 
@@ -370,6 +403,10 @@ bool AllowedToRespawn = false;
 std::unordered_map<APBPlayerController*, bool> PlayerRespawnAllowedMap{};
 
 void ProcessEventHook(UObject* Object, UFunction* Function, void* Parms) {
+    if (!Object || !Function) {
+        return ProcessEvent.call(Object, Function, Parms);
+    }
+
     if (Function->GetFullName().contains("QuickRespawn")) {
         APBPlayerController* PBPlayerController = (APBPlayerController*)Object;
 
@@ -447,7 +484,7 @@ void ConnectToMatch() {
 
     LocalPlayer->GoToRange(0.0f);
 
-    UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), L"travel 204.12.195.98", nullptr);
+    UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), L"travel 192.168.1.51", nullptr);
 
     GameInstance->ShowLoadingScreen(true, true);
 }
@@ -599,11 +636,46 @@ bool hidden = false;
 
 const wchar_t* LocalURL = L"http://127.0.0.1:8000\0";
 
+LONG WINAPI CrashHandler(EXCEPTION_POINTERS* ExceptionInfo) {
+    if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+        uintptr_t crashAddr = (uintptr_t)ExceptionInfo->ExceptionRecord->ExceptionAddress;
+        uintptr_t exeBase = (uintptr_t)GetModuleHandleA(nullptr);
+        uintptr_t crashOffset = crashAddr - exeBase;
+
+        // Patch known crashes in engine NotifyControlMessage handler (offset range 0x1561710 - 0x1561A00)
+        if (crashOffset >= 0x1561710 && crashOffset < 0x1561A00) {
+            ExceptionInfo->ContextRecord->Rdi = 0;
+            ExceptionInfo->ContextRecord->Rbx = 0;
+            ExceptionInfo->ContextRecord->Rip = exeBase + 0x15619EF;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
+        // Patch crash in replication code at 0x1C47C57: movzx eax, [rbx+0x39] where rbx=null
+        if (crashOffset == 0x1C47C57) {
+            ExceptionInfo->ContextRecord->Rip = exeBase + 0x1C47C9B;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
+        FILE* f = nullptr;
+        fopen_s(&f, "crash_log.txt", "a");
+        if (f) {
+            fprintf(f, "=== CRASH ===\n");
+            fprintf(f, "EXE offset: 0x%llX\n", (unsigned long long)crashOffset);
+            fprintf(f, "Access address: 0x%llX\n", (unsigned long long)ExceptionInfo->ExceptionRecord->ExceptionInformation[1]);
+            fprintf(f, "RAX: 0x%llX RBX: 0x%llX\n", (unsigned long long)ExceptionInfo->ContextRecord->Rax, (unsigned long long)ExceptionInfo->ContextRecord->Rbx);
+            fclose(f);
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 void MainThread() {
     AllocConsole();
     FILE* Dummy;
     freopen_s(&Dummy, "CONOUT$", "w", stdout);
     freopen_s(&Dummy, "CONIN$", "r", stdin);
+
+    AddVectoredExceptionHandler(1, CrashHandler);
 
     BaseAddress = (uintptr_t)GetModuleHandleA(nullptr);
 
@@ -614,13 +686,13 @@ void MainThread() {
     }
 
     while (!UWorld::GetWorld()) {
-        if (amServer) {
-            *(__int8*)(BaseAddress + 0x5ce2404) = 0;
-            *(__int8*)(BaseAddress + 0x5ce2405) = 1;
-        }
     }
 
     if (amServer) {
+        // Memory patches disabled — they cause crashes and skip the menu
+        // *(__int8*)(BaseAddress + 0x5ce2404) = 0;
+        // *(__int8*)(BaseAddress + 0x5ce2405) = 1;
+
         InitServerHooks();
 
         LoadConfig();
