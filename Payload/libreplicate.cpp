@@ -120,24 +120,31 @@ bool LibReplicate::HaveWeSentThisTemporaryActor(UNetConnection* Connection, AAct
 }
 
 void LibReplicate::CallFromTickFlushHook(std::vector<FActorInfo>& Actors, std::vector<FPlayerControllerInfo>& PlayerControllers, std::vector<UNetConnection*>& Connections, void* ActorChannelName, UNetDriver* NetDriver) {
+	// Clear the close queue — don't actually call ActorChannelClose as it
+	// crashes on already-destroyed channels. Just let the engine clean up.
+	{
+		std::scoped_lock t(this->ChannelsToCloseMutex);
+		this->ChannelsToClose->clear();
+	}
+
 	for (auto const& ActorInfo : Actors) {
+		if (!ActorInfo.ActorPtr) continue;
 		this->CallPreReplicationFuncPtr(ActorInfo.ActorPtr, NetDriver);
 	}
 
 	for (auto const& PlayerControllerInfo : PlayerControllers) {
-		this->CallPreReplicationFuncPtr(PlayerControllerInfo.PlayerController, NetDriver);
+		if (!PlayerControllerInfo.PlayerController || !PlayerControllerInfo.OwningConnection) continue;
 
+		this->CallPreReplicationFuncPtr(PlayerControllerInfo.PlayerController, NetDriver);
 		this->SendClientAdjustmentFuncPtr(PlayerControllerInfo.PlayerController);
 
 		UActorChannel* Channel = GetChannelForActor(PlayerControllerInfo.OwningConnection, PlayerControllerInfo.PlayerController);
 
 		if (!Channel) {
-
 			Channel = this->CreateChannelFuncPtr(PlayerControllerInfo.OwningConnection, (FName*)ActorChannelName, 1 << 1, -1);
 
 			if (Channel) {
 				AddActorChannelToChannels(PlayerControllerInfo.OwningConnection, Channel, PlayerControllerInfo.PlayerController);
-
 				this->SetChannelActorFuncPtr(Channel, PlayerControllerInfo.PlayerController, 0);
 			}
 		}
@@ -148,19 +155,21 @@ void LibReplicate::CallFromTickFlushHook(std::vector<FActorInfo>& Actors, std::v
 	}
 
 	for (UNetConnection* Connection : Connections) {
+		if (!Connection) continue;
+
 		for (auto const &ActorInfo : Actors) {
+			if (!ActorInfo.ActorPtr) continue;
+
 			if (ActorInfo.bNetTemporary && HaveWeSentThisTemporaryActor(Connection, ActorInfo.ActorPtr))
 				continue;
 
 			UActorChannel* Channel = GetChannelForActor(Connection, ActorInfo.ActorPtr);
 
 			if (!Channel) {
-
 				Channel = this->CreateChannelFuncPtr(Connection, (FName*)ActorChannelName, 1 << 1, -1);
 
 				if (Channel) {
 					AddActorChannelToChannels(Connection, Channel, ActorInfo.ActorPtr);
-
 					this->SetChannelActorFuncPtr(Channel, ActorInfo.ActorPtr, 0);
 				}
 			}
@@ -170,43 +179,25 @@ void LibReplicate::CallFromTickFlushHook(std::vector<FActorInfo>& Actors, std::v
 					*(unsigned int*)((__int64)Channel + 0x88) |= 2;
 				}
 
-				if (this->ReplicateActorFuncPtr(Channel)) {
-					//std::cout << ((SDK::UObject*)ActorInfo.ActorPtr)->GetFullName() << std::endl;
-				};
+				this->ReplicateActorFuncPtr(Channel);
 			}
 		}
 	}
-
-	/*
-	{
-		std::scoped_lock t(this->ChannelsToCloseMutex);
-		if (!this->ChannelsToClose->empty()) {
-			while (this->ChannelsToClose->size() > 0) {
-				UActorChannel* Channel = this->ChannelsToClose->back();
-
-				this->ActorChannelCloseFuncPtr(Channel, 0);
-
-				this->ChannelsToClose->pop_back();
-			}
-		}
-	}*/
 }
 
 void LibReplicate::CallWhenActorDestroyed(FActorInfo& ActorInfo) {
 	for (auto& pair : *(this->Channels)) {
 		UActorChannel* Channel = GetChannelForActor(pair.first, ActorInfo.ActorPtr);
 
-		if (Channel) {
-			{
-				std::scoped_lock t(this->ChannelsToCloseMutex);
-
-				this->ChannelsToClose->push_back(Channel);
-			}
-		}
-
+		// Remove from tracking FIRST so it's never replicated again
 		pair.second.erase(std::remove_if(pair.second.begin(), pair.second.end(), [ActorInfo](const std::pair<UActorChannel*, AActor*> &test) {
 			return test.second == ActorInfo.ActorPtr;
 		}), pair.second.end());
+
+		if (Channel) {
+			std::scoped_lock t(this->ChannelsToCloseMutex);
+			this->ChannelsToClose->push_back(Channel);
+		}
 	}
 
 	if (ActorInfo.bNetTemporary) {

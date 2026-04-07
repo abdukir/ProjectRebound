@@ -10,10 +10,15 @@
 #include <fstream>
 
 #include "libreplicate.h"
+#include <unordered_set>
+#include <mutex>
 
 using namespace SDK;
 
 static LibReplicate* libReplicate;
+
+static std::unordered_set<void*> DestroyedActors;
+static std::mutex DestroyedActorsMutex;
 
 uintptr_t BaseAddress = 0x0;
 
@@ -153,6 +158,13 @@ void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
         UWorld::GetWorld()->NetDriver = NetDriver;
         NetDriver->World = UWorld::GetWorld();
 
+        // Clear old destroyed actors set (addresses may be reused)
+        {
+            std::lock_guard<std::mutex> lock(DestroyedActorsMutex);
+            if (DestroyedActors.size() > 1000)
+                DestroyedActors.clear();
+        }
+
         std::vector<LibReplicate::FActorInfo> ActorInfos = std::vector<LibReplicate::FActorInfo>();
         std::vector<UNetConnection*> Connections = std::vector<UNetConnection*>();
         std::vector<void*> PlayerControllers = std::vector<void*>();
@@ -189,6 +201,12 @@ void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
 
                     if (actor->bActorIsBeingDestroyed)
                         continue;
+
+                    {
+                        std::lock_guard<std::mutex> lock(DestroyedActorsMutex);
+                        if (DestroyedActors.count((void*)actor))
+                            continue;
+                    }
 
                     if (actor->Class == APlayerController_BP_C::StaticClass()) {
                         PlayerControllers.push_back((void*)actor);
@@ -343,15 +361,17 @@ void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
 SafetyHookInline NotifyActorDestroyed = {};
 
 bool NotifyActorDestroyedHook(UWorld* World, AActor* Actor, bool SomeShit, bool SomeShit2) {
-    bool ret = NotifyActorDestroyed.call<bool>(World, Actor, SomeShit, SomeShit2);
+    if (listening && Actor) {
+        {
+            std::lock_guard<std::mutex> lock(DestroyedActorsMutex);
+            DestroyedActors.insert((void*)Actor);
+        }
 
-    if (listening) {
         LibReplicate::FActorInfo ActorInfo = LibReplicate::FActorInfo((void*)Actor, Actor->bNetTemporary);
-
         libReplicate->CallWhenActorDestroyed(ActorInfo);
     }
 
-    return ret;
+    return NotifyActorDestroyed.call<bool>(World, Actor, SomeShit, SomeShit2);
 }
 
 SafetyHookInline NotifyAcceptingConnection = {};
