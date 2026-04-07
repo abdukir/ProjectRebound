@@ -475,6 +475,20 @@ __int64 HudFunctionThatCrashesTheGameHook(__int64 a1, __int64 a2) {
     return 0;
 }
 
+std::wstring GameServerIP = L"127.0.0.1";
+
+void ParseGameServerIP() {
+    std::string cmdLine = GetCommandLineA();
+    std::string flag = "-GameServerIP=";
+    auto pos = cmdLine.find(flag);
+    if (pos != std::string::npos) {
+        auto start = pos + flag.length();
+        auto end = cmdLine.find(' ', start);
+        std::string ip = cmdLine.substr(start, end == std::string::npos ? end : end - start);
+        GameServerIP = std::wstring(ip.begin(), ip.end());
+    }
+}
+
 void ConnectToMatch() {
     UPBGameInstance* GameInstance = (UPBGameInstance*)UWorld::GetWorld()->OwningGameInstance;
 
@@ -484,7 +498,8 @@ void ConnectToMatch() {
 
     LocalPlayer->GoToRange(0.0f);
 
-    UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), L"travel 192.168.1.51", nullptr);
+    std::wstring travelCmd = L"travel " + GameServerIP;
+    UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), travelCmd.c_str(), nullptr);
 
     GameInstance->ShowLoadingScreen(true, true);
 }
@@ -680,6 +695,9 @@ void MainThread() {
     BaseAddress = (uintptr_t)GetModuleHandleA(nullptr);
 
     UC::FMemory::Init((void*)(BaseAddress + 0x18f4350));
+
+    ParseGameServerIP();
+    std::wcout << L"[DBG] GameServerIP: " << GameServerIP << std::endl;
 
     if (std::string(GetCommandLineA()).contains("-server")) {
         amServer = true;
