@@ -185,6 +185,39 @@ void LibReplicate::CallFromTickFlushHook(std::vector<FActorInfo>& Actors, std::v
 	}
 }
 
+void LibReplicate::SafeReplicateInner(UActorChannel* Channel) {
+	this->ReplicateActorFuncPtr(Channel);
+}
+
+void LibReplicate::SafeReplicate(UActorChannel* Channel) {
+	__try {
+		SafeReplicateInner(Channel);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+void LibReplicate::SafeCallPreReplicationInner(AActor* Actor, UNetDriver* NetDriver) {
+	this->CallPreReplicationFuncPtr(Actor, NetDriver);
+}
+
+void LibReplicate::SafeCallPreReplication(AActor* Actor, UNetDriver* NetDriver) {
+	__try {
+		SafeCallPreReplicationInner(Actor, NetDriver);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+void LibReplicate::SafeSendClientAdjustmentInner(AActor* PC) {
+	this->SendClientAdjustmentFuncPtr(PC);
+}
+
+void LibReplicate::SafeSendClientAdjustment(AActor* PC) {
+	__try {
+		SafeSendClientAdjustmentInner(PC);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
 void LibReplicate::CallWhenActorDestroyed(FActorInfo& ActorInfo) {
 	for (auto& pair : *(this->Channels)) {
 		UActorChannel* Channel = GetChannelForActor(pair.first, ActorInfo.ActorPtr);

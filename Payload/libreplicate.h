@@ -161,4 +161,11 @@ public:
 	void CallFromTickFlushHook(std::vector<FActorInfo>& Actors, std::vector<FPlayerControllerInfo>& PlayerControllers, std::vector<UNetConnection*>& Connections, void* ActorChannelName, UNetDriver* NetDriver);
 
 	void CallWhenActorDestroyed(FActorInfo& Actor);
+
+	void SafeReplicate(UActorChannel* Channel);
+	void SafeReplicateInner(UActorChannel* Channel);
+	void SafeCallPreReplication(AActor* Actor, UNetDriver* NetDriver);
+	void SafeCallPreReplicationInner(AActor* Actor, UNetDriver* NetDriver);
+	void SafeSendClientAdjustment(AActor* PC);
+	void SafeSendClientAdjustmentInner(AActor* PC);
 };

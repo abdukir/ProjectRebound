@@ -19,6 +19,7 @@ static LibReplicate* libReplicate;
 
 static std::unordered_set<void*> DestroyedActors;
 static std::mutex DestroyedActorsMutex;
+static float ReplicationCooldown = 0.0f;
 
 uintptr_t BaseAddress = 0x0;
 
@@ -123,7 +124,11 @@ void ReplicateSafe(LibReplicate* lib, std::vector<LibReplicate::FActorInfo>& Act
 
 void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
     if (listening && NetDriver && UWorld::GetWorld()) {
-        //std::cout << DeltaTime << std::endl;
+        // Skip replication during cooldown after actor destruction
+        if (ReplicationCooldown > 0.0f) {
+            ReplicationCooldown -= DeltaTime;
+            return TickFlush.call(NetDriver, DeltaTime);
+        }
 
         if (PlayerJoinTimerSelectFuck > 0.0f) {
             PlayerJoinTimerSelectFuck -= DeltaTime;
@@ -362,6 +367,10 @@ SafetyHookInline NotifyActorDestroyed = {};
 
 bool NotifyActorDestroyedHook(UWorld* World, AActor* Actor, bool SomeShit, bool SomeShit2) {
     if (listening && Actor) {
+        // Pause replication briefly for non-temporary actors (characters dying)
+        if (!Actor->bNetTemporary)
+            ReplicationCooldown = 0.2f;
+
         {
             std::lock_guard<std::mutex> lock(DestroyedActorsMutex);
             DestroyedActors.insert((void*)Actor);
