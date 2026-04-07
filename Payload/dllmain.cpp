@@ -107,6 +107,15 @@ int NumExpectedPlayers = -1;
 
 float MatchStartCountdown = -1.0f;
 
+void ReplicateSafe(LibReplicate* lib, std::vector<LibReplicate::FActorInfo>& Actors, std::vector<LibReplicate::FPlayerControllerInfo>& PCs, std::vector<void*>& Conns, void* Name, void* Driver) {
+    __try {
+        lib->CallFromTickFlushHook(Actors, PCs, Conns, Name, (UNetDriver*)Driver);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Replication crashed — silently skip this tick
+    }
+}
+
 void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
     if (listening && NetDriver && UWorld::GetWorld()) {
         //std::cout << DeltaTime << std::endl;
@@ -242,9 +251,8 @@ void TickFlushHook(UNetDriver* NetDriver, float DeltaTime) {
         }
 
         if (ActorInfos.size() > 0 && CastConnections.size() > 0) {
-            //std::cout << "TRYING TO REPLICATE" << std::endl;
             if (NetDriver) {
-                libReplicate->CallFromTickFlushHook(ActorInfos, PlayerControllerInfos, CastConnections, ActorName, NetDriver);
+                ReplicateSafe(libReplicate, ActorInfos, PlayerControllerInfos, CastConnections, ActorName, (void*)NetDriver);
                 *(int*)((uintptr_t)NetDriver + 0x420) = *(int*)((uintptr_t)NetDriver + 0x420) + 1;
             }
         }
@@ -668,6 +676,24 @@ LONG WINAPI CrashHandler(EXCEPTION_POINTERS* ExceptionInfo) {
         // Patch crash in replication code at 0x1C47C57: movzx eax, [rbx+0x39] where rbx=null
         if (crashOffset == 0x1C47C57) {
             ExceptionInfo->ContextRecord->Rip = exeBase + 0x1C47C9B;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
+        // Patch crash at 0x1CCD9CF-0x1CCD9D5: corrupted vtable pointer in replication
+        if (crashOffset >= 0x1CCD9CF && crashOffset <= 0x1CCD9D5) {
+            ExceptionInfo->ContextRecord->Rip = exeBase + 0x1CCDA07;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
+        // Patch crash at 0x18D215E: corrupted linked list pointer during actor death
+        if (crashOffset == 0x18D215E) {
+            ExceptionInfo->ContextRecord->Rip = exeBase + 0x18D21D1;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
+        // Patch crash at 0x1B83BD6: corrupted vtable call in replication loop
+        if (crashOffset == 0x1B83BD6) {
+            ExceptionInfo->ContextRecord->Rip = exeBase + 0x1B83C2D;
             return EXCEPTION_CONTINUE_EXECUTION;
         }
 

@@ -165,11 +165,11 @@ void LibReplicate::CallFromTickFlushHook(std::vector<FActorInfo>& Actors, std::v
 				}
 			}
 
-			if (!(*(unsigned int*)((__int64)Channel + 0x88) & 0x2)) {
-				*(unsigned int*)((__int64)Channel + 0x88) |= 2;
-			}
-
 			if (Channel) {
+				if (!(*(unsigned int*)((__int64)Channel + 0x88) & 0x2)) {
+					*(unsigned int*)((__int64)Channel + 0x88) |= 2;
+				}
+
 				if (this->ReplicateActorFuncPtr(Channel)) {
 					//std::cout << ((SDK::UObject*)ActorInfo.ActorPtr)->GetFullName() << std::endl;
 				};
